@@ -22,29 +22,24 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Make Gradle executable
-        run: chmod +x ./gradlew
-
-      - name: Show Gradle version
-        run: ./gradlew --version
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace --no-daemon
+        run: gradle assembleDebug --stacktrace
 
       - name: Find Debug APK
         id: apk
         run: |
-          echo "Searching for debug APK..."
-          find . -type f -path "*/build/outputs/apk/*" -name "*.apk" -print
-
           APK=$(find . -type f -path "*/build/outputs/apk/*" -name "*debug*.apk" | head -n 1)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: Debug APK was not found."
+            echo "Debug APK not found!"
+            find . -type f -name "*.apk" -print
             exit 1
           fi
 
-          echo "Found APK: $APK"
+          echo "Found: $APK"
           echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
 
       - name: Upload Debug APK
