@@ -22,13 +22,15 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Check Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME"
+          ls "$ANDROID_HOME/build-tools" | tail -1
 
       - name: Make Gradle executable
         run: chmod +x ./gradlew
 
-      # Build ONLY Release variant
       - name: Build Release APK
         run: |
           ./gradlew assembleRelease \
@@ -50,41 +52,34 @@ jobs:
             exit 1
           fi
 
-          echo "Found: $APK"
+          echo "Release APK: $APK"
           echo "path=$APK" >> "$GITHUB_OUTPUT"
 
-      - name: Get Android Build Tools
-        shell: bash
+      - name: Get Build Tools
         run: |
           BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
           echo "BUILD_TOOLS=$BUILD_TOOLS" >> "$GITHUB_ENV"
 
-      # Decode permanent keystore from GitHub Secret
       - name: Prepare signing key
         shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "RELEASE_KEYSTORE_BASE64 secret is missing."
+            echo "Missing RELEASE_KEYSTORE_BASE64"
             exit 1
           fi
 
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
 
-      # Align
-      - name: Zipalign Release APK
-        shell: bash
+      - name: Zipalign APK
         run: |
           "$BUILD_TOOLS/zipalign" \
-            -f \
-            -p 4 \
+            -f -p 4 \
             "${{ steps.apk.outputs.path }}" \
             "$RUNNER_TEMP/aligned.apk"
 
-      # Sign
       - name: Sign Stable Release APK
-        shell: bash
         env:
           KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
@@ -95,26 +90,18 @@ jobs:
             --ks-pass env:KEYSTORE_PASSWORD \
             --key-pass env:KEY_PASSWORD \
             --ks-key-alias "$KEY_ALIAS" \
-            --out "$RUNNER_TEMP/app-arm64-release.apk" \
+            --out "$RUNNER_TEMP/app-arm64-stable-release.apk" \
             "$RUNNER_TEMP/aligned.apk"
 
-      # Verify final APK
-      - name: Verify Release APK
+      - name: Verify APK
         run: |
           "$BUILD_TOOLS/apksigner" verify --verbose \
-            "$RUNNER_TEMP/app-arm64-release.apk"
+            "$RUNNER_TEMP/app-arm64-stable-release.apk"
 
-      - name: Rename APK
-        run: |
-          mkdir -p release
-          cp "$RUNNER_TEMP/app-arm64-release.apk" \
-             "release/app-arm64-stable-release.apk"
-
-      # Upload final APK
-      - name: Upload Stable APK
+      - name: Upload Stable ARM64 APK
         uses: actions/upload-artifact@v4
         with:
           name: Stable-ARM64-Release
-          path: release/app-arm64-stable-release.apk
+          path: ${{ runner.temp }}/app-arm64-stable-release.apk
           if-no-files-found: error
           retention-days: 30
