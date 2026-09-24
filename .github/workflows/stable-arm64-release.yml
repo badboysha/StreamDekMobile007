@@ -1,0 +1,120 @@
+name: Stable ARM64 Release APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build Stable ARM64 Release
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Make Gradle executable
+        run: chmod +x ./gradlew
+
+      # Build ONLY Release variant
+      - name: Build Release APK
+        run: |
+          ./gradlew assembleRelease \
+            --no-daemon \
+            --stacktrace
+
+      - name: Find Release APK
+        id: apk
+        shell: bash
+        run: |
+          APK=$(find . \
+            -type f \
+            -path "*/build/outputs/apk/*.apk" \
+            ! -name "*debug*" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "Release APK not found!"
+            exit 1
+          fi
+
+          echo "Found: $APK"
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+
+      - name: Get Android Build Tools
+        shell: bash
+        run: |
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          echo "BUILD_TOOLS=$BUILD_TOOLS" >> "$GITHUB_ENV"
+
+      # Decode permanent keystore from GitHub Secret
+      - name: Prepare signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "RELEASE_KEYSTORE_BASE64 secret is missing."
+            exit 1
+          fi
+
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+
+      # Align
+      - name: Zipalign Release APK
+        shell: bash
+        run: |
+          "$BUILD_TOOLS/zipalign" \
+            -f \
+            -p 4 \
+            "${{ steps.apk.outputs.path }}" \
+            "$RUNNER_TEMP/aligned.apk"
+
+      # Sign
+      - name: Sign Stable Release APK
+        shell: bash
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: |
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks "$RUNNER_TEMP/release.keystore" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --ks-key-alias "$KEY_ALIAS" \
+            --out "$RUNNER_TEMP/app-arm64-release.apk" \
+            "$RUNNER_TEMP/aligned.apk"
+
+      # Verify final APK
+      - name: Verify Release APK
+        run: |
+          "$BUILD_TOOLS/apksigner" verify --verbose \
+            "$RUNNER_TEMP/app-arm64-release.apk"
+
+      - name: Rename APK
+        run: |
+          mkdir -p release
+          cp "$RUNNER_TEMP/app-arm64-release.apk" \
+             "release/app-arm64-stable-release.apk"
+
+      # Upload final APK
+      - name: Upload Stable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stable-ARM64-Release
+          path: release/app-arm64-stable-release.apk
+          if-no-files-found: error
+          retention-days: 30
